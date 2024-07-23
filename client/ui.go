@@ -78,7 +78,7 @@ func (ui *Ui) Start() {
 					Sender:  ui.username,
 				}
 				ui.messageInput.clear()
-			} else {
+			} else if 32 <= ev.Rune() && ev.Rune() <= 126  {
 				ui.messageInput.addChar(ev.Rune())
 			}
 		}
