@@ -11,7 +11,9 @@ import (
 )
 
 const (
-	MAX_LENGTH = 256
+	MAX_MSG_LENGTH = 256
+	MIN_WIDTH      = 50
+	MIN_HEIGHT     = 6
 )
 
 func NewUi(username string) *Ui {
@@ -24,17 +26,16 @@ func NewUi(username string) *Ui {
 	}
 
 	width, height := screen.Size()
-	defaultStyle := tcell.StyleDefault.Foreground(tcell.ColorDarkRed)
-	screen.SetStyle(defaultStyle)
 
 	mi := NewMessageInput(
-		0,
-		height-1-2, // -1 bcs index start from 0, -2 for top border, single line of text and char counter
-		width-1,
-		height-1,
-		MAX_LENGTH,
+		0, height-1-2,
+		width-1, height-1,
+		MAX_MSG_LENGTH,
 	)
-	chatHistory := NewChatHistory(0, 0, width-1, mi.Y1-1)
+	chatHistory := NewChatHistory(
+		0, 0,
+		width-1, mi.Y1-1,
+	)
 
 	return &Ui{
 		messageInput: *mi,
@@ -62,7 +63,8 @@ func (ui *Ui) Start() {
 
 		event := ui.screen.PollEvent()
 		switch ev := event.(type) {
-		// case *tcell.EventResize:
+		case *tcell.EventResize:
+			ui.screen.Sync()
 		// render(ui.screen, chatHistory, mi)
 		case *tcell.EventKey:
 			if ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC {
@@ -72,13 +74,15 @@ func (ui *Ui) Start() {
 				ui.messageInput.removeChar()
 			} else if ev.Key() == tcell.KeyEnter {
 				// send message
-				ui.msg <- common.Message{
-					Payload: string(ui.messageInput.Text),
-					Type:    common.MSG_TYPE,
-					Sender:  ui.username,
+				if len(ui.messageInput.Text) > 0 {
+					ui.msg <- common.Message{
+						Payload: string(ui.messageInput.Text),
+						Type:    common.MSG_TYPE,
+						Sender:  ui.username,
+					}
+					ui.messageInput.clear()
 				}
-				ui.messageInput.clear()
-			} else if 32 <= ev.Rune() && ev.Rune() <= 126  {
+			} else if 32 <= ev.Rune() && ev.Rune() <= 126 {
 				ui.messageInput.addChar(ev.Rune())
 			}
 		}
@@ -87,60 +91,105 @@ func (ui *Ui) Start() {
 
 func (ui *Ui) addMessage(msg common.Message) {
 	ui.chatHistory.addMessage(msg)
-
 	ui.render()
+}
+
+func (ui *Ui) recalculateSize() {
+	width, height := ui.screen.Size()
+	width = max(width, MIN_WIDTH)
+	height = max(height, MIN_HEIGHT)
+
+	ui.messageInput.X2 = width - 1
+	ui.messageInput.Y2 = height - 1
+	rowCapacity := ui.messageInput.rowCapacity()
+	ui.messageInput.Y1 = ui.messageInput.Y2 - 1 - max(
+		1, // when there is no text we still want empty row
+		int(math.Ceil(float64(len(ui.messageInput.Text))/float64(rowCapacity))), // +1 for char counter row
+	)
+
+	ui.chatHistory.X2 = width - 1
+	ui.chatHistory.Y2 = ui.messageInput.Y1 - 1
 }
 
 func (ui *Ui) render() {
 	ui.screen.Clear()
 	defer ui.screen.Show()
 
-	var width, _ int = ui.screen.Size()
+	style := tcell.StyleDefault.Foreground(tcell.ColorWhite)
 
-	boxStyle := tcell.StyleDefault.Foreground(tcell.ColorWhite)
+	ui.recalculateSize()
+	ui.renderChatHistory(style)
+	ui.renderMessageInput(style)
+}
 
-	// drawText(screen, 2, 2, 50, 3, boxStyle,
-	// 	fmt.Sprintf("width=%d, height=%d",
-	// 		width, height,
-	// 	),
-	// )
-	// drawText(screen, 2, 3, 50, 4, boxStyle,
-	// 	fmt.Sprintf("inputBox x1=%d, y1=%d, x2=%d, y2=%d",
-	// 		mi.X1, mi.Y1, mi.X2, mi.Y2,
-	// 	),
-	// )
-	ui.messageInput.recalculateSize()
-	// drawText(screen, 2, 4, 50, 5, boxStyle,
-	// 	"after recalc",
-	// )
-	// drawText(screen, 2, 5, 50, 6, boxStyle,
-	// 	fmt.Sprintf("inputBox x1=%d, y1=%d, x2=%d, y2=%d",
-	// 		mi.X1, mi.Y1, mi.X2, mi.Y2,
-	// 	),
-	// )
+func (ui *Ui) renderChatHistory(style tcell.Style) {
+	drawBox(ui.screen, ui.chatHistory.X1, ui.chatHistory.Y1, ui.chatHistory.X2, ui.chatHistory.Y2, style)
 
-	ui.chatHistory.X2 = width - 1
-	ui.chatHistory.Y2 = ui.messageInput.Y1 - 1
+	// calcute message idx from which we should render chat history
+	rowCapacity := ui.chatHistory.rowCapacity()
+	startY := ui.chatHistory.Y1 + 1
+	startMsgIdx := 0
+	var msg string
+	var msgLen, rows int
+	for i := len(ui.chatHistory.messages) - 1; i >= 0; i-- {
+		msg = fmt.Sprintf("%s: %s", ui.chatHistory.messages[i].Sender, ui.chatHistory.messages[i].Payload)
+		msgLen = len(msg)
+		rows = int(math.Ceil(float64(msgLen) / float64(rowCapacity)))
 
-	// chat box
-	drawBox(ui.screen, ui.chatHistory.X1, ui.chatHistory.Y1, ui.chatHistory.X2, ui.chatHistory.Y2, boxStyle)
-	// FIXME: multi line text
-	for i := 0; i < ui.chatHistory.lineCapacity(); i++ {
-		if i < len(ui.chatHistory.messages) {
-			drawText(ui.screen, ui.chatHistory.X1+1, ui.chatHistory.Y1+i+1, ui.chatHistory.X2-1,
-				ui.chatHistory.Y1+i+2, boxStyle, fmt.Sprintf("%s: %s", ui.chatHistory.messages[i].Sender, ui.chatHistory.messages[i].Payload))
+		// not enough space. do not render message
+		if startY+rows-1 >= ui.chatHistory.Y2 {
+			break
 		}
+
+		startY += rows
+		startMsgIdx = i
 	}
 
+	// render every message starting from startMsgIdx
+	startY = ui.chatHistory.Y1 + 1
+	for i := startMsgIdx; i < len(ui.chatHistory.messages); i++ {
+		msg = fmt.Sprintf("%s: %s", ui.chatHistory.messages[i].Sender, ui.chatHistory.messages[i].Payload)
+		msgLen = len(msg)
+
+		rows = int(math.Ceil(float64(msgLen) / float64(rowCapacity)))
+		drawText(ui.screen,
+			ui.chatHistory.X1+1, startY,
+			ui.chatHistory.X2-1, startY+rows-1,
+			style,
+			msg,
+		)
+
+		startY += rows
+	}
+}
+
+func (ui *Ui) renderMessageInput(style tcell.Style) {
 	// draw input message box
-	drawBox(ui.screen, ui.messageInput.X1, ui.messageInput.Y1, ui.messageInput.X2, ui.messageInput.Y2, boxStyle)
+	drawBox(
+		ui.screen,
+		ui.messageInput.X1, ui.messageInput.Y1,
+		ui.messageInput.X2, ui.messageInput.Y2,
+		style,
+	)
 	// draw input message text
-	drawText(ui.screen, ui.messageInput.X1+1, ui.messageInput.Y1+1, ui.messageInput.X2-1, ui.messageInput.Y2-1, boxStyle, string(ui.messageInput.Text))
+	drawText(
+		ui.screen,
+		ui.messageInput.X1+1, ui.messageInput.Y1+1,
+		ui.messageInput.X2-1, ui.messageInput.Y2-1,
+		style,
+		string(ui.messageInput.Text),
+	)
 	// draw cursor
 	ui.screen.ShowCursor(ui.messageInput.cursorPosition())
 	// draw characters counter
 	counter := fmt.Sprintf("%d/%d", len(ui.messageInput.Text), ui.messageInput.maxLen)
-	drawText(ui.screen, ui.messageInput.X2-len(counter), ui.messageInput.Y2, ui.messageInput.X2, ui.messageInput.Y2, boxStyle, counter)
+	drawText(
+		ui.screen,
+		ui.messageInput.X2-len(counter), ui.messageInput.Y2,
+		ui.messageInput.X2, ui.messageInput.Y2,
+		style,
+		counter,
+	)
 }
 
 func NewMessageInput(x1, y1, x2, y2 int, maxLen uint) *MessageInput {
@@ -183,29 +232,20 @@ func (mi *MessageInput) clear() {
 	mi.Text = make([]rune, 0)
 }
 
-func (mi *MessageInput) lineCapacity() int {
+func (mi *MessageInput) rowCapacity() int {
 	return mi.X2 - mi.X1 - 1
 }
 
-func (mi *MessageInput) recalculateSize() {
-	lineCapacity := mi.lineCapacity()
-
-	mi.Y1 = mi.Y2 - 1 - max(
-		1, // when there is no text we still want empty line
-		int(math.Ceil(float64(len(mi.Text))/float64(lineCapacity))), // +1 for char counter line
-	)
-}
-
 func (mi *MessageInput) cursorPosition() (int, int) {
-	lineCapacity := mi.lineCapacity()
+	rowCapacity := mi.rowCapacity()
 
-	lastLineLength := len(mi.Text) % lineCapacity
-	// if last string length equals to lineCapacity we want cursor to be on the same line
-	if len(mi.Text) > 0 && lastLineLength == 0 {
-		lastLineLength = len(mi.Text)
+	lastRowLength := len(mi.Text) % rowCapacity
+	// if last string length equals to rowCapacity we want cursor to be on the same row
+	if len(mi.Text) > 0 && lastRowLength == 0 {
+		lastRowLength = len(mi.Text)
 	}
 
-	return mi.X1 + lastLineLength + 1, mi.Y2 - 1
+	return mi.X1 + lastRowLength + 1, mi.Y2 - 1
 }
 
 func NewChatHistory(x1, y1, x2, y2 int) *ChatHistory {
@@ -224,7 +264,7 @@ type ChatHistory struct {
 	messages []common.Message
 }
 
-func (ch *ChatHistory) lineCapacity() int {
+func (ch *ChatHistory) rowCapacity() int {
 	return ch.X2 - ch.X1 - 1
 }
 
