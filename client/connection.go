@@ -9,29 +9,23 @@ import (
 	"github.com/titivuk/gigachat/v2/common"
 )
 
-const (
-	_ = iota
-	AUTH
-	MSG
-	ERROR
-)
-
 const CLIENT_SENDER = "[Client]"
 
-func NewConnection(token string) Connection {
-
+func NewConnection(token, username string) Connection {
 	return Connection{
-		msg:   make(chan string),
-		token: token,
+		msg:      make(chan common.Message),
+		token:    token,
+		username: username,
 	}
 }
 
 type Connection struct {
-	conn    net.Conn
-	encoder *gob.Encoder
-	decoder *gob.Decoder
-	msg     chan string
-	token   string
+	conn     net.Conn
+	encoder  *gob.Encoder
+	decoder  *gob.Decoder
+	msg      chan common.Message
+	token    string
+	username string
 }
 
 func (c *Connection) connect() {
@@ -46,7 +40,7 @@ func (c *Connection) connect() {
 	c.decoder = gob.NewDecoder(conn)
 
 	msg := common.Message{
-		Type:    AUTH,
+		Type:    common.AUTH_TYPE,
 		Payload: c.token,
 		Sender:  c.sender(),
 	}
@@ -59,39 +53,33 @@ func (c *Connection) connect() {
 		var msg common.Message
 		err := c.decoder.Decode(&msg)
 		if err == io.EOF {
-			c.msg <- msg.Payload
+			c.msg <- msg
 			log.Fatal("Connection closed")
 		}
 		if err != nil {
-			c.msg <- msg.Payload
+			c.msg <- msg
 			log.Fatalf("Error decoding message - %s", err)
 		}
 
 		switch msg.Type {
-		case AUTH:
-			c.msg <- msg.Payload
+		case common.AUTH_TYPE:
+			c.msg <- msg
 
 			if msg.Payload == "Unauthorised" {
 				log.Fatal(msg.Payload)
 			}
-		case MSG:
-			c.msg <- msg.Payload
-		case ERROR:
-			c.msg <- msg.Payload
+		case common.MSG_TYPE:
+			c.msg <- msg
+		case common.ERROR_TYPE:
+			c.msg <- msg
 		}
 	}
 }
 
-func (c *Connection) sendMessage(payload string) error {
-	msg := common.Message{
-		Type:    MSG,
-		Payload: payload,
-		Sender:  c.sender(),
-	}
-
+func (c *Connection) sendMessage(msg common.Message) error {
 	return c.encoder.Encode(msg)
 }
 
 func (c *Connection) sender() string {
-	return c.conn.LocalAddr().String()
+	return c.username
 }

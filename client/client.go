@@ -1,18 +1,15 @@
 package client
 
-func StartClient() {
-	token := "abc"
-
-	ui := NewUi()
+func StartClient(token, username string) {
+	ui := NewUi(username)
 	go ui.Start()
 
-	conn := NewConnection(token)
+	conn := NewConnection(token, username)
 	go conn.connect()
 
 	for {
 		select {
 		case msg := <-ui.msg:
-			// server does not send message back to sender
 			ui.addMessage(msg)
 			conn.sendMessage(msg)
 		case msg := <-conn.msg:

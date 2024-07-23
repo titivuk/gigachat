@@ -7,13 +7,14 @@ import (
 	"os"
 
 	"github.com/gdamore/tcell"
+	"github.com/titivuk/gigachat/v2/common"
 )
 
 const (
 	MAX_LENGTH = 256
 )
 
-func NewUi() *Ui {
+func NewUi(username string) *Ui {
 	screen, err := tcell.NewScreen()
 	if err != nil {
 		log.Fatalf("+%v", err)
@@ -38,16 +39,18 @@ func NewUi() *Ui {
 	return &Ui{
 		messageInput: *mi,
 		chatHistory:  *chatHistory,
-		msg:          make(chan string),
+		msg:          make(chan common.Message),
 		screen:       screen,
+		username:     username,
 	}
 }
 
 type Ui struct {
 	messageInput MessageInput
 	chatHistory  ChatHistory
-	msg          chan string
+	msg          chan common.Message
 	screen       tcell.Screen
+	username     string
 }
 
 func (ui *Ui) Start() {
@@ -69,7 +72,11 @@ func (ui *Ui) Start() {
 				ui.messageInput.removeChar()
 			} else if ev.Key() == tcell.KeyEnter {
 				// send message
-				ui.msg <- string(ui.messageInput.Text)
+				ui.msg <- common.Message{
+					Payload: string(ui.messageInput.Text),
+					Type:    common.MSG_TYPE,
+					Sender:  ui.username,
+				}
 				ui.messageInput.clear()
 			} else {
 				ui.messageInput.addChar(ev.Rune())
@@ -78,7 +85,7 @@ func (ui *Ui) Start() {
 	}
 }
 
-func (ui *Ui) addMessage(msg string) {
+func (ui *Ui) addMessage(msg common.Message) {
 	ui.chatHistory.addMessage(msg)
 
 	ui.render()
@@ -121,7 +128,7 @@ func (ui *Ui) render() {
 	for i := 0; i < ui.chatHistory.lineCapacity(); i++ {
 		if i < len(ui.chatHistory.messages) {
 			drawText(ui.screen, ui.chatHistory.X1+1, ui.chatHistory.Y1+i+1, ui.chatHistory.X2-1,
-				ui.chatHistory.Y1+i+2, boxStyle, ui.chatHistory.messages[i])
+				ui.chatHistory.Y1+i+2, boxStyle, fmt.Sprintf("%s: %s", ui.chatHistory.messages[i].Sender, ui.chatHistory.messages[i].Payload))
 		}
 	}
 
@@ -207,21 +214,21 @@ func NewChatHistory(x1, y1, x2, y2 int) *ChatHistory {
 		Y1:       y1,
 		X2:       x2,
 		Y2:       y2,
-		messages: make([]string, 0),
+		messages: make([]common.Message, 0),
 	}
 }
 
 type ChatHistory struct {
 	X1, Y1   int
 	X2, Y2   int
-	messages []string
+	messages []common.Message
 }
 
 func (ch *ChatHistory) lineCapacity() int {
 	return ch.X2 - ch.X1 - 1
 }
 
-func (ch *ChatHistory) addMessage(msg string) {
+func (ch *ChatHistory) addMessage(msg common.Message) {
 	ch.messages = append(ch.messages, msg)
 }
 

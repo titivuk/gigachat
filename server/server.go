@@ -19,38 +19,17 @@ const (
 	DISCONNECTED_MSG = "Disconnected"
 )
 
-const (
-	_ = iota
-	AUTH
-	MSG
-	ERROR
-)
-
 func NewServer(token string) Server {
 	return Server{
 		Token:   token,
 		clients: map[string]Client{},
-		// rooms: map[string]Room{},
 	}
 }
-
-// type Room struct {
-// 	Token     string
-// 	clients   map[string]Client
-// 	clientsMu sync.Mutex
-// }
 
 type Server struct {
 	Token     string
 	clients   map[string]Client
 	clientsMu sync.Mutex
-	// rooms     map[string]Room
-}
-
-func (s *Server) AddClient(client Client) {
-	s.clientsMu.Lock()
-	defer s.clientsMu.Unlock()
-	s.clients[client.Conn.RemoteAddr().String()] = client
 }
 
 func (s *Server) HandleConnection(conn net.Conn) {
@@ -64,71 +43,72 @@ func (s *Server) HandleConnection(conn net.Conn) {
 
 		if err != nil {
 			if err == io.EOF {
-				fmt.Printf("Client disconnected: %s\n", client.Conn.RemoteAddr().String())
+				fmt.Printf("Client disconnected: %s\n", client.sender())
 
 				s.RemoveClient(client)
 				disconnectMsg := common.Message{
-					Type:    MSG,
+					Type:    common.MSG_TYPE,
 					Payload: DISCONNECTED_MSG,
-					Sender:  client.Conn.RemoteAddr().String(),
+					Sender:  client.sender(),
 				}
 				s.BroadcastMessage(disconnectMsg, client)
 				return
 			}
 
-			log.Printf("Cannot read message from %s. Error: %s", client.Conn.RemoteAddr().String(), err)
+			log.Printf("Cannot read message from %s. Error: %s", client.sender(), err)
 			continue
 		}
 
 		log.Printf("Incoming message: %v\n", msg)
 
 		switch msg.Type {
-		case AUTH:
+		case common.AUTH_TYPE:
 			if client.Authorised {
 				continue
 			}
 
 			if msg.Payload != s.Token {
-				unauthMsg := common.Message{Type: AUTH, Payload: UNAUTHORISED_MSG, Sender: SERVER_SENDER}
+				unauthMsg := common.Message{Type: common.AUTH_TYPE, Payload: UNAUTHORISED_MSG, Sender: SERVER_SENDER}
 				s.SendMessage(client, unauthMsg)
 				s.RemoveClient(client)
 
 				disconnectMsg := common.Message{
-					Type:    MSG,
-					Payload: "Disconnected",
-					Sender:  client.Conn.RemoteAddr().String(),
+					Type:    common.MSG_TYPE,
+					Payload: DISCONNECTED_MSG,
+					Sender:  client.sender(),
 				}
 				s.BroadcastMessage(disconnectMsg, client)
 				return
 			}
 
 			client.Authorised = true
+			client.username = msg.Sender
 			s.AddClient(client)
 
 			joinMsg := common.Message{
-				Type:    MSG,
+				Type:    common.MSG_TYPE,
 				Payload: "Joined",
-				Sender:  client.Conn.RemoteAddr().String(),
+				Sender:  client.sender(),
 			}
 			s.BroadcastMessage(joinMsg, client)
 
-			authMsg := common.Message{Type: AUTH, Payload: AUTHORISED_MSG, Sender: SERVER_SENDER}
+			authMsg := common.Message{Type: common.AUTH_TYPE, Payload: AUTHORISED_MSG, Sender: SERVER_SENDER}
 			s.SendMessage(client, authMsg)
-		case MSG:
+		case common.MSG_TYPE:
 			if !client.Authorised {
-				responseMsg := common.Message{Type: AUTH, Payload: UNAUTHORISED_MSG, Sender: SERVER_SENDER}
+				responseMsg := common.Message{Type: common.AUTH_TYPE, Payload: UNAUTHORISED_MSG, Sender: SERVER_SENDER}
 				s.SendMessage(client, responseMsg)
 				s.RemoveClient(client)
 				return
 			}
 
 			if msg.Payload == "" || !utf8.ValidString(msg.Payload) {
-				responseMsg := common.Message{Type: ERROR, Payload: "msg.Payload should be a valid non-empty utf-8 string", Sender: SERVER_SENDER}
+				responseMsg := common.Message{Type: common.ERROR_TYPE, Payload: "msg.Payload should be a valid non-empty utf-8 string", Sender: SERVER_SENDER}
 				s.SendMessage(client, responseMsg)
 				continue
 			}
 
-			msg.Sender = client.Conn.RemoteAddr().String()
+			msg.Sender = client.sender()
 			s.BroadcastMessage(msg, client)
 		default:
 			fmt.Printf("Unknown message type: %d\n", msg.Type)
@@ -136,10 +116,16 @@ func (s *Server) HandleConnection(conn net.Conn) {
 	}
 }
 
+func (s *Server) AddClient(client Client) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+	s.clients[client.sender()] = client
+}
+
 func (s *Server) RemoveClient(client Client) {
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
-	delete(s.clients, client.Conn.RemoteAddr().String())
+	delete(s.clients, client.sender())
 }
 
 func (s *Server) BroadcastMessage(msg common.Message, source Client) {
@@ -170,4 +156,9 @@ type Client struct {
 	Conn       net.Conn
 	Encoder    *gob.Encoder
 	Decoder    *gob.Decoder
+	username   string
+}
+
+func (c *Client) sender() string {
+	return c.username
 }
