@@ -11,25 +11,27 @@ import (
 
 const CLIENT_SENDER = "[Client]"
 
-func NewConnection(token, username string) Connection {
+func NewConnection(token, username, serverUrl string) Connection {
 	return Connection{
-		msg:      make(chan common.Message),
-		token:    token,
-		username: username,
+		msg:       make(chan common.Message),
+		serverUrl: serverUrl,
+		token:     token,
+		username:  username,
 	}
 }
 
 type Connection struct {
-	conn     net.Conn
-	encoder  *gob.Encoder
-	decoder  *gob.Decoder
-	msg      chan common.Message
-	token    string
-	username string
+	conn      net.Conn
+	encoder   *gob.Encoder
+	decoder   *gob.Decoder
+	msg       chan common.Message
+	serverUrl string
+	token     string
+	username  string
 }
 
 func (c *Connection) connect() {
-	conn, err := net.Dial("tcp", ":8080")
+	conn, err := net.Dial("tcp", c.serverUrl)
 	if err != nil {
 		log.Fatal("Failed to connect to the server")
 	}
