@@ -14,7 +14,13 @@ const (
 	MAX_MSG_LENGTH = 256
 	MIN_WIDTH      = 50
 	MIN_HEIGHT     = 6
+	SCROLL_SPEED   = 1
 )
+
+type msgToRender struct {
+	msg  string
+	rows int
+}
 
 func NewUi(username string) *Ui {
 	screen, err := tcell.NewScreen()
@@ -58,6 +64,8 @@ func (ui *Ui) Start() {
 	ui.screen.Clear()
 	ui.screen.Show()
 
+	ui.screen.EnableMouse()
+
 	for {
 		ui.render()
 
@@ -65,7 +73,6 @@ func (ui *Ui) Start() {
 		switch ev := event.(type) {
 		case *tcell.EventResize:
 			ui.screen.Sync()
-		// render(ui.screen, chatHistory, mi)
 		case *tcell.EventKey:
 			if ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyCtrlC {
 				ui.screen.Fini()
@@ -84,6 +91,12 @@ func (ui *Ui) Start() {
 				}
 			} else if 32 <= ev.Rune() && ev.Rune() <= 126 {
 				ui.messageInput.addChar(ev.Rune())
+			}
+		case *tcell.EventMouse:
+			if ev.Buttons()&tcell.WheelDown != 0 {
+				ui.chatHistory.reduceOffset()
+			} else if ev.Buttons()&tcell.WheelUp != 0 {
+				ui.chatHistory.increaseOffset()
 			}
 		}
 	}
@@ -152,7 +165,8 @@ func (ui *Ui) renderChatHistory(style tcell.Style) {
 		msgLen = len(msg)
 
 		rows = int(math.Ceil(float64(msgLen) / float64(rowCapacity)))
-		drawText(ui.screen,
+		drawText(
+			ui.screen,
 			ui.chatHistory.X1+1, startY,
 			ui.chatHistory.X2-1, startY+rows-1,
 			style,
@@ -161,6 +175,28 @@ func (ui *Ui) renderChatHistory(style tcell.Style) {
 
 		startY += rows
 	}
+
+	totalRows := ui.chatHistory.totalRows()
+	// TODO: use window algorithm with dynamic size?
+	for i := len(ui.chatHistory.messages) - 1; i >= 0; i-- {
+		msg = fmt.Sprintf("%s: %s", ui.chatHistory.messages[i].Sender, ui.chatHistory.messages[i].Payload)
+		rows = int(math.Ceil(float64(msgLen) / float64(rowCapacity)))
+	}
+
+	drawText(
+		ui.screen,
+		25, 1,
+		25+15, 2,
+		style,
+		fmt.Sprintf("offset: %d", ui.chatHistory.offset),
+	)
+	drawText(
+		ui.screen,
+		25, 2,
+		25+15, 3,
+		style,
+		fmt.Sprintf("totalRows: %d", totalRows),
+	)
 }
 
 func (ui *Ui) renderMessageInput(style tcell.Style) {
@@ -262,6 +298,7 @@ type ChatHistory struct {
 	X1, Y1   int
 	X2, Y2   int
 	messages []common.Message
+	offset   int
 }
 
 func (ch *ChatHistory) rowCapacity() int {
@@ -270,6 +307,36 @@ func (ch *ChatHistory) rowCapacity() int {
 
 func (ch *ChatHistory) addMessage(msg common.Message) {
 	ch.messages = append(ch.messages, msg)
+}
+
+func (ch *ChatHistory) increaseOffset() {
+	totalRows := ch.totalRows()
+	rowsAvailable := ch.Y2 - ch.Y1 - 1
+
+	newOffset := ch.offset + SCROLL_SPEED
+	if totalRows < rowsAvailable {
+		newOffset = 0
+	} else if totalRows-newOffset < rowsAvailable {
+		newOffset = totalRows - rowsAvailable
+	}
+
+	ch.offset = newOffset
+}
+
+func (ch *ChatHistory) reduceOffset() {
+	ch.offset = max(0, ch.offset-SCROLL_SPEED)
+}
+
+func (ch *ChatHistory) totalRows() int {
+	totalRows := 0
+	rowCapacity := ch.rowCapacity()
+	for i := 0; i < len(ch.messages); i++ {
+		msg := fmt.Sprintf("%s: %s", ch.messages[i].Sender, ch.messages[i].Payload)
+		rows := int(math.Ceil(float64(len(msg)) / float64(rowCapacity)))
+		totalRows += rows
+	}
+
+	return totalRows
 }
 
 func drawBox(screen tcell.Screen, x1, y1, x2, y2 int, style tcell.Style) {
